@@ -4,4 +4,3 @@ __pycache__/
 results/*.pt
 results/*.png
 venv/
-

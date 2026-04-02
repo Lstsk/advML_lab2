@@ -1,12 +1,19 @@
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from dataset import load_cifake
 from model import TransUNet
 
 
 def evaluate() -> None:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
 
     model = TransUNet(in_channels=3, num_classes=2).to(device)
     model.load_state_dict(torch.load("results/model.pth", map_location=device))
@@ -19,7 +26,7 @@ def evaluate() -> None:
     total = 0
 
     with torch.no_grad():
-        for images, labels in dataloader:
+        for images, labels in tqdm(dataloader, desc="Evaluating"):
             images = images.to(device)
             labels = labels.to(device)
 
