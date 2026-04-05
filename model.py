@@ -3,9 +3,6 @@
 Architecture adapted for 32×32 CIFAKE images:
   CNN Encoder → Transformer Encoder → U-Net Decoder → Classification Head
 """
-
-import math
-
 import torch
 import torch.nn as nn
 
