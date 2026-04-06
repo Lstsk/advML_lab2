@@ -1,77 +1,76 @@
-# TransUNet for AI-Generated Image Detection
+# TransUNet and U-Net for Semantic Segmentation
 
-Binary classification of real vs. AI-generated images using a **TransUNet** (Transformer + U-Net) architecture on the **CIFAKE** dataset.
+This project compares:
 
-## Overview
+- `baseline_model.py`: plain U-Net baseline
+- `model.py`: TransUNet
 
-This project adapts the TransUNet architecture — which combines a Vision Transformer encoder with a U-Net decoder — for the task of detecting AI-generated images. Rather than segmentation, the model is repurposed for binary classification: **Real (0)** vs. **AI-Generated (1)**.
+The default dataset is now **Pascal VOC 2012** via torchvision.
+
+## Files
+
+- `dataset.py`: single dataset-loading entrypoint
+- `train.py`: train TransUNet
+- `train_baseline.py`: train U-Net baseline
+- `eval.py`: evaluate TransUNet
+- `eval_baseline.py`: evaluate U-Net baseline
 
 ## Dataset
 
-**CIFAKE: Real and AI-Generated Synthetic Images**
-- Source: [Kaggle – birdy654/cifake-real-and-ai-generated-synthetic-images](https://www.kaggle.com/datasets/birdy654/cifake-real-and-ai-generated-synthetic-images)
-- 60,000 training images and 10,000 test images (32×32, RGB)
-- Two classes: `REAL` and `FAKE`
+### Pascal VOC 2012
 
-```python
-import kagglehub
+The code uses `torchvision.datasets.VOCSegmentation` and can download VOC 2012 automatically.
 
-path = kagglehub.dataset_download("birdy654/cifake-real-and-ai-generated-synthetic-images")
-print("Path to dataset files:", path)
-```
+- Dataset name in scripts: `voc`
+- Default root: `data/voc`
+- Default image size: `256x256`
+- Number of classes: `21`
 
-## Architecture
-
-**TransUNet** merges the strengths of Transformers and U-Net:
-
-1. **CNN Encoder** — extracts local feature maps from input images
-2. **Transformer Encoder** — captures global context via self-attention on patch embeddings
-3. **U-Net Decoder** — upsamples with skip connections from the CNN encoder
-4. **Classification Head** — global average pooling + fully connected layer for binary output
-
-## Project Structure
-
-```
-├── model.py          # TransUNet model implementation
-├── dataset.py        # CIFAKE dataset loading and preprocessing
-├── train.py          # Training loop
-├── eval.py           # Evaluation script
-├── pyproject.toml    # Project config and dependencies (managed by uv)
-├── uv.lock           # Locked dependency versions
-├── data/             # Dataset files (not tracked)
-└── results/          # Checkpoints and outputs
-```
+The first time you run training or evaluation, torchvision will download the dataset into `data/voc`.
 
 ## Setup
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
-
 ```bash
-# Install dependencies
 uv sync
-
-# Download the dataset
-uv run python -c "import kagglehub; kagglehub.dataset_download('birdy654/cifake-real-and-ai-generated-synthetic-images')"
 ```
 
-## Usage
+## Training
+
+Train the U-Net baseline:
 
 ```bash
-# Train the model
-uv run python train.py
+uv run python train_baseline.py
+```
 
-# Evaluate
+Train TransUNet:
+
+```bash
+uv run python train.py
+```
+
+You can also pass the dataset explicitly:
+
+```bash
+uv run python train_baseline.py --dataset voc --data-root data/voc
+uv run python train.py --dataset voc --data-root data/voc
+```
+
+## Evaluation
+
+Evaluate the U-Net baseline:
+
+```bash
+uv run python eval_baseline.py
+```
+
+Evaluate TransUNet:
+
+```bash
 uv run python eval.py
 ```
 
-## Dependencies
+## Notes
 
-- Python ≥ 3.12
-- torch
-- torchvision
-- kagglehub
-- numpy
-- Pillow
-- matplotlib
-
-All dependencies are managed via `pyproject.toml`. Run `uv sync` to install them.
+- Evaluation defaults to the VOC `val` split.
+- Metrics reported are pixel accuracy and mean IoU.
+- `dataset.py` still contains Cityscapes and legacy CIFAKE loaders, but the default path is VOC.

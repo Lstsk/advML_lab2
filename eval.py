@@ -1,42 +1,110 @@
+from __future__ import annotations
+
+import argparse
+
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset import load_cifake
+from dataset import load_dataset
 from model import TransUNet
 
 
-def evaluate() -> None:
+def get_device() -> torch.device:
     if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate a TransUNet segmentation model.")
+    parser.add_argument("--dataset", default="voc", help="Dataset name. Default: voc")
+    parser.add_argument("--data-root", default=None, help="Path to the dataset root")
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--height", type=int, default=256)
+    parser.add_argument("--width", type=int, default=256)
+    parser.add_argument("--checkpoint", default="results/model.pth")
+    parser.add_argument("--split", default="val", help="Dataset split. Default: val")
+    return parser.parse_args()
+
+
+def update_confusion_matrix(
+    confusion_matrix: torch.Tensor,
+    predictions: torch.Tensor,
+    masks: torch.Tensor,
+    num_classes: int,
+    ignore_index: int,
+) -> torch.Tensor:
+    valid = masks != ignore_index
+    predictions = predictions[valid]
+    masks = masks[valid]
+
+    indices = masks * num_classes + predictions
+    batch_confusion = torch.bincount(indices, minlength=num_classes * num_classes)
+    confusion_matrix += batch_confusion.reshape(num_classes, num_classes)
+    return confusion_matrix
+
+
+def evaluate() -> None:
+    args = parse_args()
+    device = get_device()
+    image_size = (args.height, args.width)
+
     print(f"Using device: {device}")
 
-    model = TransUNet(in_channels=3, num_classes=2).to(device)
-    model.load_state_dict(torch.load("results/model.pth", map_location=device))
+    dataset, config = load_dataset(
+        name=args.dataset,
+        split=args.split,
+        data_root=args.data_root,
+        image_size=image_size,
+    )
+    if config["task"] != "segmentation":
+        raise ValueError(
+            f"Dataset '{args.dataset}' is a {config['task']} dataset, but this evaluation script expects segmentation."
+        )
 
-    test_dataset = load_cifake(split="test")
-    dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
 
+    model = TransUNet(num_classes=config["num_classes"], input_size=image_size).to(device)
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     model.eval()
-    correct = 0
-    total = 0
+
+    confusion_matrix = torch.zeros(
+        (config["num_classes"], config["num_classes"]),
+        dtype=torch.int64,
+    )
 
     with torch.no_grad():
-        for images, labels in tqdm(dataloader, desc="Evaluating"):
+        for images, masks in tqdm(dataloader, desc="Evaluating"):
             images = images.to(device)
-            labels = labels.to(device)
+            masks = masks.to(device)
 
-            outputs = model(images)
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
+            logits = model(images)
+            predictions = torch.argmax(logits, dim=1)
+            confusion_matrix = update_confusion_matrix(
+                confusion_matrix,
+                predictions.cpu(),
+                masks.cpu(),
+                config["num_classes"],
+                config["ignore_index"],
+            )
 
-    accuracy = 100.0 * correct / total
-    print(f"Test Accuracy: {accuracy:.2f}% ({correct}/{total})")
+    intersection = confusion_matrix.diag().float()
+    union = confusion_matrix.sum(dim=1).float() + confusion_matrix.sum(dim=0).float() - intersection
+    iou = intersection / union.clamp_min(1.0)
+    mean_iou = iou.mean().item()
+    pixel_accuracy = intersection.sum().item() / confusion_matrix.sum().clamp_min(1).item()
+
+    print(f"Pixel Accuracy: {100.0 * pixel_accuracy:.2f}%")
+    print(f"Mean IoU: {100.0 * mean_iou:.2f}%")
 
 
 if __name__ == "__main__":

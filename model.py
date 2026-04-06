@@ -1,18 +1,13 @@
-"""TransUNet: Transformer + U-Net for binary image classification.
+"""TransUNet for semantic segmentation."""
 
-Architecture adapted for 32×32 CIFAKE images:
-  CNN Encoder → Transformer Encoder → U-Net Decoder → Classification Head
-"""
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 
 
-# ---------------------------------------------------------------------------
-# Building blocks
-# ---------------------------------------------------------------------------
-
 class DoubleConv(nn.Module):
-    """Two consecutive (Conv2d → BatchNorm → ReLU) blocks."""
+    """Two consecutive convolution blocks."""
 
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
@@ -30,7 +25,7 @@ class DoubleConv(nn.Module):
 
 
 class DownBlock(nn.Module):
-    """Downsample via MaxPool then DoubleConv."""
+    """Downsample via max-pooling followed by DoubleConv."""
 
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
@@ -44,12 +39,12 @@ class DownBlock(nn.Module):
 
 
 class UpBlock(nn.Module):
-    """Upsample via ConvTranspose2d, concatenate skip, then DoubleConv."""
+    """Upsample, concatenate skip features, then refine."""
 
-    def __init__(self, in_ch: int, out_ch: int) -> None:
+    def __init__(self, in_ch: int, skip_ch: int, out_ch: int) -> None:
         super().__init__()
         self.up = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
-        self.conv = DoubleConv(in_ch, out_ch)
+        self.conv = DoubleConv(out_ch + skip_ch, out_ch)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.up(x)
@@ -57,12 +52,8 @@ class UpBlock(nn.Module):
         return self.conv(x)
 
 
-# ---------------------------------------------------------------------------
-# Transformer components
-# ---------------------------------------------------------------------------
-
 class PatchEmbedding(nn.Module):
-    """Flatten spatial feature map into patch tokens + add positional encoding."""
+    """Flatten spatial feature maps to tokens and add positional embeddings."""
 
     def __init__(self, embed_dim: int, num_patches: int) -> None:
         super().__init__()
@@ -70,15 +61,13 @@ class PatchEmbedding(nn.Module):
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, H, W) → (B, H*W, C)
-        B, C, H, W = x.shape
-        x = x.flatten(2).transpose(1, 2)  # (B, N, C) where N = H*W
-        x = x + self.pos_embed
-        return x
+        _, _, _, _ = x.shape
+        x = x.flatten(2).transpose(1, 2)
+        return x + self.pos_embed
 
 
 class TransformerBlock(nn.Module):
-    """Standard Transformer encoder block: LayerNorm → MHSA → LayerNorm → FFN."""
+    """Standard Transformer encoder block."""
 
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float = 4.0, dropout: float = 0.1) -> None:
         super().__init__()
@@ -94,110 +83,78 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Pre-norm self-attention
         h = self.norm1(x)
         h, _ = self.attn(h, h, h)
         x = x + h
-        # Pre-norm FFN
-        x = x + self.mlp(self.norm2(x))
-        return x
+        return x + self.mlp(self.norm2(x))
 
 
 class TransformerEncoder(nn.Module):
-    """Stack of Transformer blocks operating on flattened spatial tokens."""
+    """Transformer encoder operating on flattened bottleneck tokens."""
 
     def __init__(self, embed_dim: int, num_heads: int, depth: int, num_patches: int, dropout: float = 0.1) -> None:
         super().__init__()
         self.patch_embed = PatchEmbedding(embed_dim, num_patches)
-        self.blocks = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, dropout=dropout)
-            for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [TransformerBlock(embed_dim, num_heads, dropout=dropout) for _ in range(depth)]
+        )
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, C, H, W = x.shape
-        x = self.patch_embed(x)             # (B, N, C)
+        b, c, h, w = x.shape
+        x = self.patch_embed(x)
         for block in self.blocks:
             x = block(x)
         x = self.norm(x)
-        x = x.transpose(1, 2).view(B, C, H, W)  # back to (B, C, H, W)
-        return x
+        return x.transpose(1, 2).view(b, c, h, w)
 
-
-# ---------------------------------------------------------------------------
-# TransUNet
-# ---------------------------------------------------------------------------
 
 class TransUNet(nn.Module):
-    """TransUNet adapted for binary classification on 32×32 images.
-
-    Architecture (for a 32×32 input):
-        Encoder:
-            enc1: 32×32 → 64 channels
-            enc2: 16×16 → 128 channels
-            enc3:  8×8  → 256 channels
-        Bottleneck:
-            enc3 output → Transformer encoder (self-attention on 8×8 = 64 tokens)
-        Decoder:
-            dec1: 16×16 → 128 channels (skip from enc2)
-            dec2: 32×32 → 64 channels  (skip from enc1)
-        Classification head:
-            Global Average Pooling → FC → num_classes
-    """
+    """TransUNet for semantic segmentation."""
 
     def __init__(
         self,
         in_channels: int = 3,
-        num_classes: int = 2,
+        num_classes: int = 19,
         base_ch: int = 64,
         transformer_heads: int = 8,
         transformer_depth: int = 6,
         dropout: float = 0.1,
+        input_size: tuple[int, int] = (256, 512),
     ) -> None:
         super().__init__()
 
-        # --- CNN Encoder ---
-        self.enc1 = DoubleConv(in_channels, base_ch)        # 32×32
-        self.enc2 = DownBlock(base_ch, base_ch * 2)          # 16×16
-        self.enc3 = DownBlock(base_ch * 2, base_ch * 4)      #  8×8
+        self.enc1 = DoubleConv(in_channels, base_ch)
+        self.enc2 = DownBlock(base_ch, base_ch * 2)
+        self.enc3 = DownBlock(base_ch * 2, base_ch * 4)
+        self.enc4 = DownBlock(base_ch * 4, base_ch * 8)
 
-        # --- Transformer Encoder (bottleneck) ---
-        bottleneck_dim = base_ch * 4  # 256
-        num_patches = 8 * 8           # spatial size at bottleneck for 32×32 input
+        bottleneck_h = input_size[0] // 8
+        bottleneck_w = input_size[1] // 8
+        num_patches = bottleneck_h * bottleneck_w
+
         self.transformer = TransformerEncoder(
-            embed_dim=bottleneck_dim,
+            embed_dim=base_ch * 8,
             num_heads=transformer_heads,
             depth=transformer_depth,
             num_patches=num_patches,
             dropout=dropout,
         )
 
-        # --- U-Net Decoder ---
-        self.dec1 = UpBlock(base_ch * 4, base_ch * 2)   # 8→16, skip from enc2
-        self.dec2 = UpBlock(base_ch * 2, base_ch)        # 16→32, skip from enc1
-
-        # --- Classification Head ---
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Dropout(dropout),
-            nn.Linear(base_ch, num_classes),
-        )
+        self.dec1 = UpBlock(base_ch * 8, base_ch * 4, base_ch * 4)
+        self.dec2 = UpBlock(base_ch * 4, base_ch * 2, base_ch * 2)
+        self.dec3 = UpBlock(base_ch * 2, base_ch, base_ch)
+        self.segmentation_head = nn.Conv2d(base_ch, num_classes, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Encoder
-        s1 = self.enc1(x)       # (B, 64,  32, 32)
-        s2 = self.enc2(s1)      # (B, 128, 16, 16)
-        s3 = self.enc3(s2)      # (B, 256,  8,  8)
+        s1 = self.enc1(x)
+        s2 = self.enc2(s1)
+        s3 = self.enc3(s2)
+        s4 = self.enc4(s3)
 
-        # Transformer on bottleneck
-        t = self.transformer(s3) # (B, 256,  8,  8)
+        t = self.transformer(s4)
 
-        # Decoder with skip connections
-        d1 = self.dec1(t, s2)    # (B, 128, 16, 16)
-        d2 = self.dec2(d1, s1)   # (B, 64,  32, 32)
-
-        # Classification
-        out = self.classifier(d2)  # (B, num_classes)
-        return out
+        d1 = self.dec1(t, s3)
+        d2 = self.dec2(d1, s2)
+        d3 = self.dec3(d2, s1)
+        return self.segmentation_head(d3)
