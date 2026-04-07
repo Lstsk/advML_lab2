@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torchvision.models as models
 
 
 class DoubleConv(nn.Module):
@@ -39,16 +40,17 @@ class DownBlock(nn.Module):
 
 
 class UpBlock(nn.Module):
-    """Upsample, concatenate skip features, then refine."""
+    """Upsample, optionally concatenate skip features, then refine."""
 
     def __init__(self, in_ch: int, skip_ch: int, out_ch: int) -> None:
         super().__init__()
         self.up = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
         self.conv = DoubleConv(out_ch + skip_ch, out_ch)
 
-    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, skip: torch.Tensor | None = None) -> torch.Tensor:
         x = self.up(x)
-        x = torch.cat([skip, x], dim=1)
+        if skip is not None:
+            x = torch.cat([skip, x], dim=1)
         return self.conv(x)
 
 
@@ -110,51 +112,72 @@ class TransformerEncoder(nn.Module):
 
 
 class TransUNet(nn.Module):
-    """TransUNet for semantic segmentation."""
+    """TransUNet for semantic segmentation leveraging a Pre-trained ResNet-50 backbone."""
 
     def __init__(
         self,
-        in_channels: int = 3,
-        num_classes: int = 19,
-        base_ch: int = 64,
+        num_classes: int = 21,
         transformer_heads: int = 8,
         transformer_depth: int = 6,
         dropout: float = 0.1,
-        input_size: tuple[int, int] = (256, 512),
+        input_size: tuple[int, int] = (256, 256),
     ) -> None:
         super().__init__()
 
-        self.enc1 = DoubleConv(in_channels, base_ch)
-        self.enc2 = DownBlock(base_ch, base_ch * 2)
-        self.enc3 = DownBlock(base_ch * 2, base_ch * 4)
-        self.enc4 = DownBlock(base_ch * 4, base_ch * 8)
-
-        bottleneck_h = input_size[0] // 8
-        bottleneck_w = input_size[1] // 8
+        # Pre-trained ResNet50 Encoder
+        resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+        self.conv1 = resnet.conv1
+        self.bn1 = resnet.bn1
+        self.relu = resnet.relu
+        self.maxpool = resnet.maxpool
+        
+        self.layer1 = resnet.layer1  # Output size 1/4, 256 channels
+        self.layer2 = resnet.layer2  # Output size 1/8, 512 channels
+        self.layer3 = resnet.layer3  # Output size 1/16, 1024 channels
+        
+        # We extract features at layer3 (1/16 resolution) for the Transformer
+        bottleneck_h = input_size[0] // 16
+        bottleneck_w = input_size[1] // 16
         num_patches = bottleneck_h * bottleneck_w
 
         self.transformer = TransformerEncoder(
-            embed_dim=base_ch * 8,
+            embed_dim=1024,
             num_heads=transformer_heads,
             depth=transformer_depth,
             num_patches=num_patches,
             dropout=dropout,
         )
 
-        self.dec1 = UpBlock(base_ch * 8, base_ch * 4, base_ch * 4)
-        self.dec2 = UpBlock(base_ch * 4, base_ch * 2, base_ch * 2)
-        self.dec3 = UpBlock(base_ch * 2, base_ch, base_ch)
-        self.segmentation_head = nn.Conv2d(base_ch, num_classes, kernel_size=1)
+        # Decoder Path
+        # d1 takes transformer output (1024 ch) and skips from layer2 (512 ch)
+        self.dec1 = UpBlock(in_ch=1024, skip_ch=512, out_ch=512)
+        
+        # d2 takes d1 output (512 ch) and skips from layer1 (256 ch)
+        self.dec2 = UpBlock(in_ch=512, skip_ch=256, out_ch=256)
+        
+        # d3 takes d2 output (256 ch) and skips from conv1 (64 ch)
+        self.dec3 = UpBlock(in_ch=256, skip_ch=64, out_ch=128)
+        
+        # d4 final upsample to original resolution, no skip connection
+        self.dec4 = UpBlock(in_ch=128, skip_ch=0, out_ch=64)
+
+        self.segmentation_head = nn.Conv2d(64, num_classes, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        s1 = self.enc1(x)
-        s2 = self.enc2(s1)
-        s3 = self.enc3(s2)
-        s4 = self.enc4(s3)
+        # Encoder (ResNet50)
+        x1 = self.relu(self.bn1(self.conv1(x)))  # 1/2 spatial size, 64 channels
+        x_p = self.maxpool(x1)                   # 1/4 spatial size, 64 channels
+        x2 = self.layer1(x_p)                    # 1/4 spatial size, 256 channels
+        x3 = self.layer2(x2)                     # 1/8 spatial size, 512 channels
+        x4 = self.layer3(x3)                     # 1/16 spatial size, 1024 channels
 
-        t = self.transformer(s4)
+        # Transformer Bottleneck
+        t = self.transformer(x4)                 # Still 1/16 spatial size, 1024 channels
 
-        d1 = self.dec1(t, s3)
-        d2 = self.dec2(d1, s2)
-        d3 = self.dec3(d2, s1)
-        return self.segmentation_head(d3)
+        # Decoder
+        d1 = self.dec1(t, x3)                    # 1/8 spatial size, 512 channels
+        d2 = self.dec2(d1, x2)                   # 1/4 spatial size, 256 channels
+        d3 = self.dec3(d2, x1)                   # 1/2 spatial size, 128 channels
+        d4 = self.dec4(d3, skip=None)            # 1/1 spatial size, 64 channels
+        
+        return self.segmentation_head(d4)
