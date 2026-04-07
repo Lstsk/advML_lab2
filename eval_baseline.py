@@ -99,8 +99,9 @@ def evaluate() -> None:
 
     intersection = confusion_matrix.diag().float()
     union = confusion_matrix.sum(dim=1).float() + confusion_matrix.sum(dim=0).float() - intersection
+    valid_classes = union > 0
     iou = intersection / union.clamp_min(1.0)
-    mean_iou = iou.mean().item()
+    mean_iou = iou[valid_classes].mean().item()
     pixel_accuracy = intersection.sum().item() / confusion_matrix.sum().clamp_min(1).item()
 
     print(f"Pixel Accuracy: {100.0 * pixel_accuracy:.2f}%")
