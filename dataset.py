@@ -10,10 +10,13 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+import random
+
 import kagglehub
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from torchvision import transforms
 from torchvision.datasets import Cityscapes, ImageFolder, VOCSegmentation
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
@@ -28,14 +31,37 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
 class SegmentationTransform:
-    """Apply the same resize to image and mask, with task-appropriate interpolation."""
+    """Apply the same resize to image and mask, with task-appropriate interpolation and augmentations."""
 
-    def __init__(self, image_size: tuple[int, int]) -> None:
+    def __init__(self, image_size: tuple[int, int], is_train: bool = False) -> None:
         self.image_size = image_size
+        self.is_train = is_train
 
     def __call__(self, image: Image.Image, target: Image.Image) -> tuple[torch.Tensor, torch.Tensor]:
-        image = TF.resize(image, self.image_size, interpolation=InterpolationMode.BILINEAR, antialias=True)
-        target = TF.resize(target, self.image_size, interpolation=InterpolationMode.NEAREST)
+        if self.is_train:
+            # Scale up slightly for random cropping
+            scaled_size = (int(self.image_size[0] * 1.1), int(self.image_size[1] * 1.1))
+            image = TF.resize(image, scaled_size, interpolation=InterpolationMode.BILINEAR, antialias=True)
+            target = TF.resize(target, scaled_size, interpolation=InterpolationMode.NEAREST)
+
+            # Random crop down to target size
+            i, j, h, w = transforms.RandomCrop.get_params(image, output_size=self.image_size)
+            image = TF.crop(image, i, j, h, w)
+            target = TF.crop(target, i, j, h, w)
+
+            # Random horizontal flip
+            if random.random() > 0.5:
+                image = TF.hflip(image)
+                target = TF.hflip(target)
+                
+            # Mild color jitter
+            if random.random() > 0.5:
+                image = TF.adjust_brightness(image, random.uniform(0.8, 1.2))
+            if random.random() > 0.5:
+                image = TF.adjust_contrast(image, random.uniform(0.8, 1.2))
+        else:
+            image = TF.resize(image, self.image_size, interpolation=InterpolationMode.BILINEAR, antialias=True)
+            target = TF.resize(target, self.image_size, interpolation=InterpolationMode.NEAREST)
 
         image_tensor = TF.to_tensor(image)
         image_tensor = TF.normalize(image_tensor, mean=IMAGENET_MEAN, std=IMAGENET_STD)
@@ -64,7 +90,7 @@ class CityscapesSegmentationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             mode=mode,
             target_type=target_type,
         )
-        self.transform = SegmentationTransform(image_size)
+        self.transform = SegmentationTransform(image_size, is_train=(split == "train"))
 
     def __len__(self) -> int:
         return len(self.base_dataset)
@@ -90,7 +116,7 @@ class VOCSegmentationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
             image_set=image_set,
             download=download,
         )
-        self.transform = SegmentationTransform(image_size)
+        self.transform = SegmentationTransform(image_size, is_train=(image_set == "train"))
 
     def __len__(self) -> int:
         return len(self.base_dataset)

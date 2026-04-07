@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", default="voc", help="Dataset name. Default: voc")
     parser.add_argument("--data-root", default=None, help="Path to the dataset root")
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--height", type=int, default=256)
@@ -59,7 +59,11 @@ def train() -> None:
     )
     model = TransUNet(num_classes=config["num_classes"], input_size=image_size).to(device)
 
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=config["ignore_index"])
+    # Downweight the dominant background class (index 0) to prevent mode collapse
+    class_weights = torch.ones(config["num_classes"], device=device)
+    class_weights[0] = 0.1
+    
+    criterion = torch.nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["ignore_index"])
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     model.train()
