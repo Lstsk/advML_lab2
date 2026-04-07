@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 
+import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -30,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--output", default="results/model.pth")
+    parser.add_argument("--val-split", default="val", help="Validation split. Default: val")
+    parser.add_argument("--loss-plot-output", default="results/train_vs_val_loss.png")
     return parser.parse_args()
 
 
@@ -46,6 +49,12 @@ def train() -> None:
         data_root=args.data_root,
         image_size=image_size,
     )
+    val_dataset, _ = load_dataset(
+        name=args.dataset,
+        split=args.val_split,
+        data_root=args.data_root,
+        image_size=image_size,
+    )
     if config["task"] != "segmentation":
         raise ValueError(
             f"Dataset '{args.dataset}' is a {config['task']} dataset, but this training script expects segmentation."
@@ -57,14 +66,23 @@ def train() -> None:
         shuffle=True,
         num_workers=args.num_workers,
     )
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
     model = TransUNet(num_classes=config["num_classes"], input_size=image_size).to(device)
 
-    # Downweight the dominant background class (index 0) to prevent mode collapse
+    # Lower background weight a bit so the model does not over-predict class 0.
     class_weights = torch.ones(config["num_classes"], device=device)
     class_weights[0] = 0.1
     
     criterion = torch.nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["ignore_index"])
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    train_losses: list[float] = []
+    val_losses: list[float] = []
 
     model.train()
     for epoch in range(args.epochs):
@@ -89,11 +107,48 @@ def train() -> None:
             pbar.set_postfix(loss=f"{running_loss / max(total_pixels, 1):.4f}")
 
         epoch_loss = running_loss / max(total_pixels, 1)
-        print(f"Epoch {epoch + 1}/{args.epochs} - loss: {epoch_loss:.4f}")
+        model.eval()
+        val_running_loss = 0.0
+        val_total_pixels = 0
+        with torch.no_grad():
+            for val_images, val_masks in val_dataloader:
+                val_images = val_images.to(device)
+                val_masks = val_masks.to(device)
+
+                val_logits = model(val_images)
+                val_batch_loss = criterion(val_logits, val_masks)
+
+                val_valid_pixels = (val_masks != config["ignore_index"]).sum().item()
+                val_running_loss += val_batch_loss.item() * max(val_valid_pixels, 1)
+                val_total_pixels += val_valid_pixels
+
+        val_loss = val_running_loss / max(val_total_pixels, 1)
+
+        train_losses.append(epoch_loss)
+        val_losses.append(val_loss)
+        print(f"Epoch {epoch + 1}/{args.epochs} - train loss: {epoch_loss:.4f} - val loss: {val_loss:.4f}")
+
+        model.train()
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     torch.save(model.state_dict(), args.output)
+
+    os.makedirs(os.path.dirname(args.loss_plot_output) or ".", exist_ok=True)
+    plt.figure(figsize=(8, 5))
+    epochs = range(1, args.epochs + 1)
+    plt.plot(epochs, train_losses, label="Train Loss", linewidth=2)
+    plt.plot(epochs, val_losses, label="Validation Loss", linewidth=2)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Train vs Validation Loss")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(args.loss_plot_output, dpi=200)
+    plt.close()
+
     print(f"Model saved to {args.output}")
+    print(f"Loss curve saved to {args.loss_plot_output}")
 
 
 if __name__ == "__main__":
