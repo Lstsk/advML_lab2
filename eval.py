@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 
+import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -28,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--checkpoint", default="results/model.pth")
     parser.add_argument("--split", default="val", help="Dataset split. Default: val")
+    parser.add_argument("--plot-output", default="results/confusion_matrix.png")
     return parser.parse_args()
 
 
@@ -46,6 +49,32 @@ def update_confusion_matrix(
     batch_confusion = torch.bincount(indices, minlength=num_classes * num_classes)
     confusion_matrix += batch_confusion.reshape(num_classes, num_classes)
     return confusion_matrix
+
+
+def plot_confusion_matrix(confusion_matrix: torch.Tensor, class_names: list[str], output_path: str) -> None:
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    row_sums = confusion_matrix.sum(dim=1, keepdim=True).clamp_min(1)
+    normalized = (confusion_matrix.float() / row_sums).cpu().numpy()
+
+    size = max(8, len(class_names) * 0.45)
+    fig, ax = plt.subplots(figsize=(size, size))
+    image = ax.imshow(normalized, cmap="Blues", vmin=0.0, vmax=1.0)
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+
+    ax.set_title("Normalized Confusion Matrix")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+    ax.set_xticks(range(len(class_names)))
+    ax.set_yticks(range(len(class_names)))
+    ax.set_xticklabels(class_names, rotation=45, ha="right")
+    ax.set_yticklabels(class_names)
+    ax.set_xlim(-0.5, len(class_names) - 0.5)
+    ax.set_ylim(len(class_names) - 0.5, -0.5)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
 
 
 def evaluate() -> None:
@@ -105,6 +134,9 @@ def evaluate() -> None:
 
     print(f"Pixel Accuracy: {100.0 * pixel_accuracy:.2f}%")
     print(f"Mean IoU: {100.0 * mean_iou:.2f}%")
+
+    plot_confusion_matrix(confusion_matrix, config["class_names"], args.plot_output)
+    print(f"Confusion matrix saved to {args.plot_output}")
 
 
 if __name__ == "__main__":
