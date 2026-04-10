@@ -18,21 +18,23 @@ def get_device():
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a TransUNet segmentation model.")
-    parser.add_argument("--data-root", default=None, help="Path to the dataset root")
+    parser.add_argument("--data-root", default=None)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument("--width", type=int, default=256)
-    parser.add_argument("--output", default="results/model.pth")
-    parser.add_argument("--val-split", default="val", help="Validation split")
-    parser.add_argument("--loss-plot-output", default="results/train_vs_val_loss.png")
+    parser.add_argument("--output-dir", default="results")
+    parser.add_argument("--val-split", default="val")
     return parser.parse_args()
 
 
 def train():
     args = parse_args()
+    args.output = os.path.join(args.output_dir, "model.pth")
+    args.loss_plot_output = os.path.join(args.output_dir, "train_vs_val_loss.png")
+
     device = get_device()
     image_size = (args.height, args.width)
 

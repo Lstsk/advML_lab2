@@ -69,8 +69,16 @@ Evaluate TransUNet:
 uv run python eval.py
 ```
 
+To also save a few example prediction figures, use:
+
+```bash
+uv run python eval.py --output-dir results/eval --viz-samples 3
+uv run python eval_baseline.py --output-dir results/eval_baseline --viz-samples 3
+```
+
 ## Notes
 
 - Evaluation defaults to the VOC `val` split.
 - Metrics reported are pixel accuracy and mean IoU.
+- Sample prediction plots, when enabled, show the input image, ground truth overlay, and predicted mask.
 - `dataset.py` still contains Cityscapes and legacy CIFAKE loaders, but the default path is VOC.
