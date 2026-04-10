@@ -1,18 +1,14 @@
-from __future__ import annotations
-
 import argparse
 import os
-
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 from baseline_model import UNet
 from dataset import load_dataset
 
 
-def get_device() -> torch.device:
+def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
     if torch.backends.mps.is_available():
@@ -20,9 +16,8 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Train the U-Net segmentation baseline.")
-    parser.add_argument("--dataset", default="voc", help="Dataset name. Default: voc")
     parser.add_argument("--data-root", default=None, help="Path to the dataset root")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=50)
@@ -31,35 +26,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=256)
     parser.add_argument("--width", type=int, default=256)
     parser.add_argument("--output", default="results/baseline_model.pth")
-    parser.add_argument("--val-split", default="val", help="Validation split. Default: val")
+    parser.add_argument("--val-split", default="val", help="Validation split")
     parser.add_argument("--loss-plot-output", default="results/baseline_train_vs_val_loss.png")
     return parser.parse_args()
 
 
-def train() -> None:
+def train():
     args = parse_args()
     device = get_device()
     image_size = (args.height, args.width)
 
     print(f"Using device: {device}")
 
-    train_dataset, config = load_dataset(
-        name=args.dataset,
-        split="train",
-        data_root=args.data_root,
-        image_size=image_size,
-    )
-    val_dataset, _ = load_dataset(
-        name=args.dataset,
-        split=args.val_split,
-        data_root=args.data_root,
-        image_size=image_size,
-    )
-    if config["task"] != "segmentation":
-        raise ValueError(
-            f"Dataset '{args.dataset}' is a {config['task']} dataset, but this training script expects segmentation."
-        )
+    train_dataset, config = load_dataset(split="train", data_root=args.data_root, image_size=image_size)
+    val_dataset, _ = load_dataset(split=args.val_split, data_root=args.data_root, image_size=image_size)
 
+    # Shuffle train, keep val deterministic.
     dataloader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -84,6 +66,7 @@ def train() -> None:
     train_losses: list[float] = []
     val_losses: list[float] = []
 
+    # Standard train loop.
     model.train()
     for epoch in range(args.epochs):
         running_loss = 0.0
@@ -107,6 +90,8 @@ def train() -> None:
             pbar.set_postfix(loss=f"{running_loss / max(total_pixels, 1):.4f}")
 
         epoch_loss = running_loss / max(total_pixels, 1)
+
+    # Validation loop (no gradients).
         model.eval()
         val_running_loss = 0.0
         val_total_pixels = 0
@@ -133,17 +118,16 @@ def train() -> None:
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     torch.save(model.state_dict(), args.output)
 
+    # Save a quick train-vs-val curve for reporting.
     os.makedirs(os.path.dirname(args.loss_plot_output) or ".", exist_ok=True)
     plt.figure(figsize=(8, 5))
     epochs = range(1, args.epochs + 1)
-    plt.plot(epochs, train_losses, label="Train Loss", linewidth=2)
-    plt.plot(epochs, val_losses, label="Validation Loss", linewidth=2)
+    plt.plot(epochs, train_losses, label="Train Loss")
+    plt.plot(epochs, val_losses, label="Validation Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Train vs Validation Loss")
     plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
     plt.savefig(args.loss_plot_output, dpi=200)
     plt.close()
 

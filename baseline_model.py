@@ -1,7 +1,3 @@
-"""Plain U-Net baseline for semantic segmentation."""
-
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 
@@ -11,9 +7,9 @@ class UNetDoubleConv(nn.Module):
         super().__init__()
         self.layers = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
