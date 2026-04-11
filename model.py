@@ -45,7 +45,7 @@ class UpBlock(nn.Module):
 
 
 class PatchEmbedding(nn.Module):
-    def __init__(self, embed_dim: int, num_patches: int) -> None:
+    def __init__(self, embed_dim: int, num_patches: int):
         super().__init__()
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
@@ -57,14 +57,14 @@ class PatchEmbedding(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float = 4.0, dropout: float = 0.1) -> None:
+    def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float = 4.0, dropout: float = 0.1):
         super().__init__()
         self.norm1 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, int(embed_dim * mlp_ratio)),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(int(embed_dim * mlp_ratio), embed_dim),
             nn.Dropout(dropout),
@@ -78,7 +78,7 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, depth: int, num_patches: int, dropout: float = 0.1) -> None:
+    def __init__(self, embed_dim: int, num_heads: int, depth: int, num_patches: int, dropout: float = 0.1):
         super().__init__()
         self.patch_embed = PatchEmbedding(embed_dim, num_patches)
         self.blocks = nn.ModuleList(
@@ -86,7 +86,7 @@ class TransformerEncoder(nn.Module):
         )
         self.norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor: 
         b, c, h, w = x.shape
         x = self.patch_embed(x)
         for block in self.blocks:

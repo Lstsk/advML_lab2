@@ -76,6 +76,9 @@ uv run python eval.py --output-dir results/eval --viz-samples 3
 uv run python eval_baseline.py --output-dir results/eval_baseline --viz-samples 3
 ```
 
+export XDG_CACHE_HOME=/home/clin4/scratch/cache
+export UV_CACHE_DIR=/home/clin4/scratch/uv-cache
+
 ## Notes
 
 - Evaluation defaults to the VOC `val` split.

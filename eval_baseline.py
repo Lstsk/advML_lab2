@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument("--checkpoint", default="results/baseline_model.pth")
     parser.add_argument("--split", default="val")
     parser.add_argument("--output-dir", default="results/eval_baseline")
-    parser.add_argument("--viz-samples", type=int, default=3)
+    parser.add_argument("--viz-samples", type=int, default=3) # this one to control how many sample visualizations to save
     return parser.parse_args()
 
 

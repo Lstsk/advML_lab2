@@ -47,6 +47,8 @@ def save_prediction_visualization(
 ):
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
+
+    # color map
     cmap = plt.get_cmap("tab20", len(class_names)).copy()
     cmap.set_bad(color=(0.8, 0.8, 0.8, 1.0))
 
